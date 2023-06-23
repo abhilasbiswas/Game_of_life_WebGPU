@@ -10,6 +10,9 @@
 
     <script>
         const GRID_SIZE = 32;
+        const UPDATE_INTERVAL = 200;
+        let step = 0;
+
         async function main(){
 
             if (!navigator.gpu){
@@ -32,15 +35,7 @@
             });
 
 
-            const encoder = device.createCommandEncoder();
-            const pass = encoder.beginRenderPass({
-                colorAttachments: [{
-                    view: context.getCurrentTexture().createView(),
-                    loadOp: "clear",
-                    clearValue: [0,0.1, 0.32, 1],
-                    storeOp: "store",
-                }]
-            });
+            
 
 
             const vertices = new Float32Array([
@@ -92,13 +87,15 @@
 
 
                     @group(0) @binding(0) var<uniform> grid: vec2f;
-                    
+                    @group(0) @binding(1) var<storage> cellState: array<u32>;
+
                     @vertex
                     fn vertexMain(input: VertexIn) -> VertexOut {
+                        let state = f32(cellState[input.instance]);
                         let i = f32(input.instance);
                         let cell = vec2f(i%grid.x,floor(i/grid.x));
                         let cellOffset = cell/grid * 2;
-                        let apos = (input.pos + 1)/grid - 1 + cellOffset;
+                        let apos = (input.pos*state + 1)/grid - 1 + cellOffset;
                         
                         var output: VertexOut;
                         output.pos = vec4f(apos,0,1);
@@ -132,25 +129,97 @@
                 }
                 });
 
-            const bindGroup = device.createBindGroup({
+            
+
+            const cellStateArray = new Uint32Array(GRID_SIZE*GRID_SIZE);
+            
+            
+
+            const cellStateStorage = [
+                device.createBuffer({
+                    label: "Cell state A",
+                    size: cellStateArray.byteLength,
+                    usage: GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST,
+                }),
+                device.createBuffer({
+                    label: "Cell state B",
+                    size: cellStateArray.byteLength,
+                    usage: GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST,
+                }),
+            ]
+
+            for (let i=0;i<cellStateArray.length;i+=3){
+                    cellStateArray[i]=1;
+            }
+            device.queue.writeBuffer(cellStateStorage[0], 0, cellStateArray);
+            
+            for (let i=0;i<cellStateArray.length;i+=2){
+                cellStateArray[i]=1;
+            }
+            device.queue.writeBuffer(cellStateStorage[1], 0, cellStateArray);
+
+
+            const bindGroups = [
+                device.createBindGroup({
                 label: "Cell renderer bind group",
-                layout: cellPipeline.getBindGroupLayout(0),
-                entries: [{
-                    binding: 0,
-                    resource: {buffer: uniformBuffer}
-                }],
-            });
+                    layout: cellPipeline.getBindGroupLayout(0),
+                    entries: [{
+                        binding: 0,
+                        resource: {buffer: uniformBuffer}
+                    },
+                    {
+                        binding: 1, 
+                        resource: {buffer: cellStateStorage[0]}
+                    }
+                ],
+                }),
+                device.createBindGroup({
+                label: "Cell renderer bind group",
+                    layout: cellPipeline.getBindGroupLayout(0),
+                    entries: [{
+                        binding: 0,
+                        resource: {buffer: uniformBuffer}
+                    },
+                    {
+                        binding: 1, 
+                        resource: {buffer: cellStateStorage[1]}
+                    }
+                ],
+                })
+            ];
             
-            pass.setPipeline(cellPipeline);
-            pass.setVertexBuffer(0, vertexBuffer);
-            pass.setBindGroup(0, bindGroup);
-            pass.draw(vertices.length/2, GRID_SIZE*GRID_SIZE);
+            function render(){
+                const encoder = device.createCommandEncoder();
+                const pass = encoder.beginRenderPass({
+                    colorAttachments: [{
+                        view: context.getCurrentTexture().createView(),
+                        loadOp: "clear",
+                        clearValue: [0,0.1, 0.32, 1],
+                        storeOp: "store",
+                    }]
+                });
 
+                pass.setPipeline(cellPipeline);
+                pass.setVertexBuffer(0, vertexBuffer);
+                pass.setBindGroup(0, bindGroups[step%2]);
+                pass.draw(vertices.length/2, GRID_SIZE*GRID_SIZE);
 
-            
-            pass.end();
-            device.queue.submit([encoder.finish()]);
+                pass.end();
+                device.queue.submit([encoder.finish()]);
+            }
+            function udpateGrid(){
+                step++;
+                render();
+            }
+
+            setInterval(udpateGrid, UPDATE_INTERVAL);
         }
+
+
+        
+
+        
+
         main();
     </script>
 </body>
